@@ -3,15 +3,16 @@
 
 # 需要填写的变量
 # 指定有挂载ISO镜像的FTP服务器
+# 请确保ftp服务器的防火墙selinux已经关闭,否则会导致连接不上ftp服务器
 FTPIP=""
 ## 日志采集服务器IP端口,@是udp,@@是tcp
 RSSERVER="@IP:PORT"
 # 主机IP
 HOST_IP=`hostname -I|cut -f1 -d" "`
-# 系统
+# 系统内核版本
 OSVERSION=`uname -r`
 # 当前用户
-NUSER=`who |cut -f1 -d ' '`
+NUSER=`who|head -n 1|cut -f1 -d ' '`
 # 规则
 PASSPOLICY="password    requisite     pam_cracklib.so retry=5 difok=3 minlen=10 lcredit=-1 dcredit=-1 ucredit=-1 ocredit=-1"
 ACOTPOLICY="auth        required   	  pam_tally2.so even_deny_root deny=5 unlock_time=300"
@@ -31,9 +32,9 @@ DIRECTORYLIST=(
     "/etc/ssh/sshd_config"
     "/etc/logrotate.conf"
     "/etc/sysctl.conf"
-    "/etc/firewalld/firewalld.conf"
     "/etc/rsyslog.conf"
     "/etc/pam.d/su"
+    "/etc/firewalld/firewalld.conf"
     "/etc/aliases"
     "/etc/login.defs"
 )
@@ -42,9 +43,12 @@ DIRECTORYLIST=(
 ## 备份文件
 function BACKUP_PROFILE(){
     ## 创建备份配置文件夹
-    echo -e "\033[32m >>>[[[START BACKUP]]]<<<\033[0m"
+    ## 临时如此输出,应该要做一个输出模块,返回查询结果
+    echo -e "\033[32m----------------------------------------\033[0m"
+    echo -e "\033[32m       >>>[[[START BACKUP]]]<<<\033[0m"
+    echo -e "\033[32m----------------------------------------\033[0m"
     if [ ! -d "/BCF" ]; then
-        echo -e "\033[32m BACKUP DRECTORY NOT EXIST,CREATED TO /BCF  \033[0m"
+        echo -e "\033[32mBACKUP DRECTORY NOT EXIST,CREATED TO /BCF  \033[0m"
         mkdir /BCF
     else
         echo -e "\033[33m /BCF IS EXIST! \033[0m"
@@ -56,19 +60,22 @@ function BACKUP_PROFILE(){
         FILENAME=`basename $DS`
         if [ -e $DS ]; then
             if [ -e /BCF/$FILENAME ]; then
-                echo -e "\033[33m $FILENAME ALREADY BACKUP! \033[0m"
+                echo -e "\033[33m$FILENAME ALREADY BACKUP! \033[0m"
             else
                 cp $DS /BCF/
-                echo -e "\033[32m $FILENAME BACKUP SUCCESS! \033[0m"
+                echo -e "\033[32m$FILENAME BACKUP SUCCESS! \033[0m"
             fi
         else
-            echo -e "\033[31m $DS NOT EXIST! PLEASE CHECK! \033[0m"
+            echo -e "\033[31m$DS NOT EXIST! PLEASE CHECK! \033[0m"
         fi
     done
-    echo -e "\033[32m BACKUP OVER,SAVE IN\033[33m/BCF \033[0m"
+    echo -e "\033[32mBACKUP OVER,SAVE IN\033[33m/BCF \033[0m"
 }
 
 function EXPORT_USER_LIST(){
+    echo -e "\033[32m----------------------------------------\033[0m"
+    echo -e "\033[32m  >>>[[[COLLECT SUSPICIOUS USERS]]]<<<\033[0m"
+    echo -e "\033[32m----------------------------------------\033[0m"
     echo "本机IP: $HOST_IP" > $USERLIST
     echo "所有用户UID为0的用户: " >> $USERLIST
     awk -F: '$3==0{print $1}' /etc/passwd >> $USERLIST
@@ -79,6 +86,9 @@ function EXPORT_USER_LIST(){
     echo "passwd文件下的所有用户: " >> $USERLIST
     echo "注册名    用户标识号  组标识号" >> $USERLIST
     awk -F: '{print $1,$3,$4}' /etc/passwd >> $USERLIST
+    echo "-----------------[UserList]-----------------"
+    cat $USERLIST
+    echo "-----------------[END]-----------------"
 }
 
 # 限制只有wheel组的用户可以使用su提权
@@ -89,6 +99,7 @@ function MODIFY_WHEEL_GROUP_PROFILE(){
     echo "-----------------[su]-----------------"
     grep "auth" /etc/pam.d/su
     echo "MODIFY WHEEL GROUP CONFIGURATION FILE! MODIFIED IN /etc/pam.d/su"
+    echo "-----------------[END]-----------------"
 }
 
 # 设置密码长度与警告天数
@@ -99,6 +110,7 @@ function MODIFY_LOGIN_PROFILE(){
     echo "-----------------[login.defs]-----------------"
     grep -i "^PASS_" /etc/login.defs
     echo "MODIFY /etc/login.defs"
+    echo "-----------------[END]-----------------"
 }
 
 function MODIFY_AUTHENTICATION_PROFILE(){
@@ -113,36 +125,45 @@ function MODIFY_AUTHENTICATION_PROFILE(){
     AHPASSWD=$(($AUTHLNPASSWORD))
     AHPASSWD2=$(($AUTHLNPASSWORD+2))
     AHPASSWD3=$(($AUTHLNPASSWORD+3))
-    if [ $OSN = "7" ]; then
-        sed -i "5 i$ACOTPOLICY" /etc/pam.d/system-auth
-        sed -i "5 i$ACOTPOLICY" /etc/pam.d/password-auth
-        echo "-----------------[system-auth]-----------------"
-        sed -n '3,10p' /etc/pam.d/system-auth
-        echo "-----------------[password-auth]-----------------"
-        sed -n '3,10p' /etc/pam.d/password-auth
-        echo "\033[32m ADD POLICY IN /etc/pam.d/system-auth AND /etc/pam.d INSIDE CENTOS7 \033[0m"
-    elif [ $OSN = "8" ]; then
-        ## [CentOS 8测试可用]
-        ## 更替system-auth策略
-        sed -i "$AHSYSTEM i$ACOTPOLICY8" /etc/pam.d/system-auth
-        wait
-        sed -i "$AHSYSTEM2 i$ACOTPOLICY81" /etc/pam.d/system-auth
-        wait
-        sed -i "$AHSYSTEM3 i$ACOTPOLICY82" /etc/pam.d/system-auth
-        ## 更替password-auth策略
-        sed -i "$AHPASSWD i$ACOTPOLICY8" /etc/pam.d/password-auth
-        wait
-        sed -i "$AHPASSWD2 i$ACOTPOLICY81" /etc/pam.d/password-auth
-        wait
-        sed -i "$AHPASSWD3 i$ACOTPOLICY82" /etc/pam.d/password-auth
-        wait
-        echo "-----------------[system-auth]-----------------"
-        sed -n '3,15p' /etc/pam.d/system-auth
-        echo "-----------------[password-auth]-----------------"
-        sed -n '3,15p' /etc/pam.d/password-auth
-        echo -e "\033[32m ADD POLICY IN /etc/pam.d/system-auth AND /etc/pam.d/password-auth INSIDE CENTOS8 \033[0m"
+    if [ ! -n "$OSN" ]; then
+        echo "ERROR INPUT!"
+        exit 0
     else
-        echo -e "\033[31m ERROR OS VERSION!\033[0m"
+        if [ $OSN = "7" ]; then
+            sed -i "5 i$ACOTPOLICY" /etc/pam.d/system-auth
+            sed -i "5 i$ACOTPOLICY" /etc/pam.d/password-auth
+            echo "-----------------[system-auth]-----------------"
+            sed -n '3,10p' /etc/pam.d/system-auth
+            echo "-----------------[END]-----------------"
+            echo "-----------------[password-auth]-----------------"
+            sed -n '3,10p' /etc/pam.d/password-auth
+            echo "-----------------[END]-----------------"
+            echo "\033[32m ADD POLICY IN /etc/pam.d/system-auth AND /etc/pam.d INSIDE CENTOS7 \033[0m"
+        elif [ $OSN = "8" ]; then
+            ## [CentOS 8测试可用]
+            ## 更替system-auth策略
+            sed -i "$AHSYSTEM i$ACOTPOLICY8" /etc/pam.d/system-auth
+            wait
+            sed -i "$AHSYSTEM2 i$ACOTPOLICY81" /etc/pam.d/system-auth
+            wait
+            sed -i "$AHSYSTEM3 i$ACOTPOLICY82" /etc/pam.d/system-auth
+            ## 更替password-auth策略
+            sed -i "$AHPASSWD i$ACOTPOLICY8" /etc/pam.d/password-auth
+            wait
+            sed -i "$AHPASSWD2 i$ACOTPOLICY81" /etc/pam.d/password-auth
+            wait
+            sed -i "$AHPASSWD3 i$ACOTPOLICY82" /etc/pam.d/password-auth
+            wait
+            echo "-----------------[system-auth]-----------------"
+            sed -n '3,15p' /etc/pam.d/system-auth
+            echo "-----------------[END]-----------------"
+            echo "-----------------[password-auth]-----------------"
+            sed -n '3,15p' /etc/pam.d/password-auth
+            echo "-----------------[END]-----------------"
+            echo -e "\033[32m ADD POLICY IN /etc/pam.d/system-auth AND /etc/pam.d/password-auth INSIDE CENTOS8 \033[0m"
+        else
+            echo -e "\033[31m ERROR OS VERSION!\033[0m"
+        fi
     fi
 }
 
@@ -155,8 +176,10 @@ function MODIFY_PROFILE(){
     sysctl -p
     echo "-----------------[profile]-----------------"
     grep "TMOUT" /etc/profile
+    echo "-----------------[END]-----------------"
     echo "-----------------[sysctl.conf]-----------------"
     grep "tcp_max_syn" /etc/sysctl.conf
+    echo "-----------------[END]-----------------"
 }
 
 # 修改ssh配置文件限制客户端无操作退出时间为600秒
@@ -171,6 +194,7 @@ function MODIFY_SSH_PROFILE(){
     echo "-----------------[sshd_config]-----------------"
     grep "ClientAlive" /etc/ssh/sshd_config
     grep "MaxAuthTries" /etc/ssh/sshd_config
+    echo "-----------------[END]-----------------"
 }
 
 function MODIFY_ALIASES_PROFILE(){
@@ -189,6 +213,7 @@ function MODIFY_ALIASES_PROFILE(){
     fi
     echo "-----------------[aliases]-----------------"
     grep -E '^#[^[:blank:]]' /etc/aliases
+    echo "-----------------[END]-----------------"
 }
 
 function REFUSE_MODIFY_PROFILE(){
@@ -212,38 +237,47 @@ function MODIFY_FIREWALLD_PROFILE(){
     echo "CURRENT FIREWALLD VERSION $FIREWALLD_VERSION"
     read -p "JUDGE FOR YOUSELF [y/n]" WAIT_SIGN
     echo $WAIT_SIGN
-    if [ $WAIT_SIGN = "y" ] || [ $WAIT_SIGN = "Y" ]; then
-        mkdir -p /BCF/yumbackup
-        mv /etc/yum.repos.d/* /BCF/yumbackup
-        yum clean all
-        wait
-        echo "[centos]" > /etc/yum.repos.d/local.repo
-        wait
-        echo "name=centos" >> /etc/yum.repos.d/local.repo
-        wait
-        echo "baseurl=ftp://$FTPIP/centos" >> /etc/yum.repos.d/local.repo
-        wait
-        echo "gpgcheck=1" >> /etc/yum.repos.d/local.repo
-        wait
-        echo "enabled=0" >> /etc/yum.repos.d/local.repo
-        wait
-        yum clean all
-        wait
-        yum repolist
-        wait
-        yum -y install firewalld
-        wait
-        mv /etc/yum.repos.d/local.repo /tmp
-        mv /BCF/yumbackup/*.repo /etc/yum.repos.d/
-        yum clean all
-        yum repolist
-        wait
-        echo "CONTINUE DOWN THE SCRIPT!"
-    elif [ $WAIT_SIGN = "n" ] || [ $WAIT_SIGN = "N" ]; then
-        # 装饰
-        echo "CONTINUE DOWN THE SCRIPT"
-    else
+    # 准备做个FTP服务器存活检查,如果存活再执行
+    if [ ! -n "$WAIT_SIGN" ]; then
         echo "WRONG CHOICE,FIREWALLD NOT UPDATED"
+    else
+        if [ $WAIT_SIGN = "y" ] || [ $WAIT_SIGN = "Y" ]; then
+            if [ -n "$FTPIP" ] && [[ $FTPIP =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+                mkdir -p /BCF/yumbackup
+                mv /etc/yum.repos.d/* /BCF/yumbackup
+                echo "[centos]" > /etc/yum.repos.d/local.repo
+                wait
+                echo "name=centos" >> /etc/yum.repos.d/local.repo
+                wait
+                echo "baseurl=ftp://$FTPIP/centos" >> /etc/yum.repos.d/local.repo
+                wait
+                echo "gpgcheck=0" >> /etc/yum.repos.d/local.repo
+                wait
+                echo "enabled=1" >> /etc/yum.repos.d/local.repo
+                wait
+                yum clean all > /dev/null
+                wait
+                yum makecache > /dev/null
+                wait
+                yum -y install firewalld
+                wait
+                mv /etc/yum.repos.d/local.repo /tmp
+                mv /BCF/yumbackup/*.repo /etc/yum.repos.d/
+                yum clean all > /dev/null
+                wait
+                yum makecache > /dev/null
+                wait
+                echo "CONTINUE DOWN THE SCRIPT!"
+            else
+                echo "ERROR FTP IP ADDRESS,PLEASE CHECK"
+                exit 0
+            fi
+        elif [ $WAIT_SIGN = "n" ] || [ $WAIT_SIGN = "N" ]; then
+            # 装饰
+            echo "CONTINUE DOWN THE SCRIPT"
+        else
+            echo "WRONG CHOICE,FIREWALLD NOT UPDATED"
+        fi
     fi
 
     # 添加日志到推送服务器
@@ -333,7 +367,7 @@ function MAIN(){
     # 自行决定是否执行模块
     for MDLS in ${MODULESLIST[@]}
     do
-        echo -e "\033[032m THE CURRENT MODULE IS $MDLS \033[0m"
+        echo -e "\033[032mTHE CURRENT MODULE IS $MDLS \033[0m"
         read -p "PRESS q/Q SKIPING THIS MODULE" TVARIABLES
         if [ ! -n "$TVARIABLES" ]; then
             $MDLS
@@ -346,4 +380,9 @@ function MAIN(){
         fi
     done
 
+    echo "SCRIPT FINISHED!"
+    echo "PLZ CHECK CONFIGURATION AND SERVICE OR SOMETHING"
+    echo "MAKE SURE THERE IS NOTHING WRONG"
+    echo "SUSPICIOUS USER SAVE IN /BCF/UserList.txt"
+    echo "BACKUP FILES SAVE IN /BCF"
 }
