@@ -1,19 +1,24 @@
 #! /bin/bash
 ## By: Clicgger
 
-# 需要填写的变量
-# 指定有挂载ISO镜像的FTP服务器
-# 请确保ftp服务器的防火墙selinux已经关闭,否则会导致连接不上ftp服务器
+
+## 默认没有调用MAIN模块,如要执行脚本请自行调用
+
+## 需要填写的变量
+## 指定有挂载ISO镜像的FTP服务器
+## 请确保ftp服务器的防火墙以及selinux已经关闭,否则会导致连接不上ftp服务器
+## 示例: FTPIP="192.168.1.1"
 FTPIP=""
 ## 日志采集服务器IP端口,@是udp,@@是tcp
+## 示例: RSSERVER="@192.168.1.1:514"
 RSSERVER="@IP:PORT"
-# 主机IP
+## 主机IP
 HOST_IP=`hostname -I|cut -f1 -d" "`
-# 系统内核版本
+## 系统内核版本
 OSVERSION=`uname -r`
-# 当前用户
+## 当前用户
 NUSER=`who|head -n 1|cut -f1 -d ' '`
-# 规则
+## 规则
 PASSPOLICY="password    requisite     pam_cracklib.so retry=5 difok=3 minlen=10 lcredit=-1 dcredit=-1 ucredit=-1 ocredit=-1"
 ACOTPOLICY="auth        required   	  pam_tally2.so even_deny_root deny=5 unlock_time=300"
 ACOTPOLICY8="auth    requisite       pam_faillock.so preauth even_deny_root deny=5 unlock_time=300"
@@ -39,14 +44,14 @@ DIRECTORYLIST=(
     "/etc/login.defs"
 )
 
+# 给read中字符串着色的办法
+# read -p $'\e[31mFoobar\e[0m: ' <= works
+
 
 ## 备份文件
 function BACKUP_PROFILE(){
     ## 创建备份配置文件夹
     ## 临时如此输出,应该要做一个输出模块,返回查询结果
-    echo -e "\033[32m----------------------------------------\033[0m"
-    echo -e "\033[32m       >>>[[[START BACKUP]]]<<<\033[0m"
-    echo -e "\033[32m----------------------------------------\033[0m"
     if [ ! -d "/BCF" ]; then
         echo -e "\033[32mBACKUP DRECTORY NOT EXIST,CREATED TO /BCF  \033[0m"
         mkdir /BCF
@@ -73,9 +78,6 @@ function BACKUP_PROFILE(){
 }
 
 function EXPORT_USER_LIST(){
-    echo -e "\033[32m----------------------------------------\033[0m"
-    echo -e "\033[32m  >>>[[[COLLECT SUSPICIOUS USERS]]]<<<\033[0m"
-    echo -e "\033[32m----------------------------------------\033[0m"
     echo "本机IP: $HOST_IP" > $USERLIST
     echo "所有用户UID为0的用户: " >> $USERLIST
     awk -F: '$3==0{print $1}' /etc/passwd >> $USERLIST
@@ -113,6 +115,7 @@ function MODIFY_LOGIN_PROFILE(){
     echo "-----------------[END]-----------------"
 }
 
+# 分系统限制systeam-auth模块
 function MODIFY_AUTHENTICATION_PROFILE(){
     echo "CURRENT SYSTEM VERSION $OSVERSION JUDGE FOR YOURSELF"
     read -p "CENTOS7 PLEASE ENTER 7 || CENTOS8 PLEASE ENTER 8: " OSN
@@ -238,9 +241,14 @@ function MODIFY_FIREWALLD_PROFILE(){
     read -p "JUDGE FOR YOUSELF [y/n]" WAIT_SIGN
     echo $WAIT_SIGN
     # 准备做个FTP服务器存活检查,如果存活再执行
+
+    # 使用openssl替代telnet对端口进行测试
+    # openssl s_client -connect IP:PORT
     if [ ! -n "$WAIT_SIGN" ]; then
         echo "WRONG CHOICE,FIREWALLD NOT UPDATED"
     else
+        # 回滚模块无法回滚防火墙版本为旧版,目前来说是这样.
+        # 不推荐回滚回旧版本,除非业务需求... 建议手动操作
         if [ $WAIT_SIGN = "y" ] || [ $WAIT_SIGN = "Y" ]; then
             if [ -n "$FTPIP" ] && [[ $FTPIP =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
                 mkdir -p /BCF/yumbackup
@@ -266,6 +274,9 @@ function MODIFY_FIREWALLD_PROFILE(){
                 yum clean all > /dev/null
                 wait
                 yum makecache > /dev/null
+                wait
+                # 更新更新完之后,复制新版本的配置文件到备份文件夹中.
+                \cp /etc/firewalld/firewalld.conf /BCF
                 wait
                 echo "CONTINUE DOWN THE SCRIPT!"
             else
@@ -320,12 +331,14 @@ function ROLLBACK_OPERATION(){
     else
         # 倒斜线有取消aliases和特殊符号的作用.
         # 因为cp指令默认别名是cp -i所以每次执行都会询问是否覆盖
+        # 直接复制备份文件夹内的配置还原
         \cp /BCF/su /etc/pam.d/su
         \cp /BCF/login.defs /etc/login.defs
         \cp /BCF/system-auth /etc/pam.d/system-auth
         \cp /BCF/password-auth /etc/pam.d/password-auth
         \cp /BCF/sysctl.conf /etc/sysctl.conf
         \cp /BCF/profile /etc/profile
+        source /etc/profile
         \cp /BCF/sshd_config /etc/ssh/sshd_config
         systemctl restart sshd
         \cp /BCF/aliases /etc/aliases
@@ -333,7 +346,18 @@ function ROLLBACK_OPERATION(){
         chattr -i /etc/shadow
         chattr -i /etc/group
         chattr -i /etc/gshadow
-        # 这边防火墙和日志就不做回退了,保持端口放行,做透明桥日志记录
+        # 防火墙不做回滚版本操作,我没有进行测试,不确定是否会出什么问题.
+        # 所以只还原一下firewalld.conf配置文件
+        \cp /BCF/firewalld.conf /etc/firewalld/firewalld.conf
+        # 顺带关闭防火墙
+        systemctl stop firewalld
+
+        rm -f /etc/rsyslog.d/firewalld.conf
+        /etc/logrotate.d/syslog
+        sed -e "s#^/var/log/firewalld##g" /etc/logrotate.d/syslog
+        sed -e "s/*.*$RSSERVER//g" /etc/rsyslog.conf
+        systemctl restart rsyslog
+        service auditd restart
     fi
 }
 
@@ -350,6 +374,8 @@ function MAIN(){
     BACKUP_PROFILE
     # 导出用户列表(不需要询问用户,必做的操作)
     EXPORT_USER_LIST
+    # 回滚操作,只还原配置文件,防火墙没有回滚更新
+    ROLLBACK_OPERATION
 
     # 功能模块列表,执行的模块如果有先后顺序,请自行排序
     MODULESLIST=(
@@ -367,14 +393,22 @@ function MAIN(){
     # 自行决定是否执行模块
     for MDLS in ${MODULESLIST[@]}
     do
+        echo -e "\033[32m----------------------------------------\033[0m"
         echo -e "\033[032mTHE CURRENT MODULE IS $MDLS \033[0m"
+        echo -e "\033[32m----------------------------------------\033[0m"
         read -p "PRESS q/Q SKIPING THIS MODULE" TVARIABLES
         if [ ! -n "$TVARIABLES" ]; then
+            echo -e "\033[32m----------------------------------------\033[0m"
+            echo -e "\033[32m  >>>[[[$MDLS]]]<<<\033[0m"
+            echo -e "\033[32m----------------------------------------\033[0m"
             $MDLS
         else
             if [ $TVARIABLES = "q" ] || [ $TVARIABLES = "Q" ]; then
                 echo "\033[32m SKIPING THIS MODULE \033[0m"
             else
+                echo -e "\033[32m----------------------------------------\033[0m"
+                echo -e "\033[32m  >>>[[[$MDLS]]]<<<\033[0m"
+                echo -e "\033[32m----------------------------------------\033[0m"
                 $MDLS
             fi
         fi
@@ -386,3 +420,6 @@ function MAIN(){
     echo "SUSPICIOUS USER SAVE IN /BCF/UserList.txt"
     echo "BACKUP FILES SAVE IN /BCF"
 }
+
+echo "默认没有调用MAIN模块,如要执行脚本请自行调用"
+#MAIN
